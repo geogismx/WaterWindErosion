@@ -1,0 +1,925 @@
+var NLP_regions = ee.FeatureCollection("users/tensorflow/NLPMU_2018"),
+    image = ee.Image("AU/GA/DEM_1SEC/v10/DEM-H"),
+    table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017"),
+    imageCollection = ee.ImageCollection("NOAA/CFSV2/FOR6H");
+
+
+var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','Australia')
+var geometry = Australia.geometry();
+
+var searchbox = 4000;
+
+var maxh = ee.Image(image).focal_max({radius: 4000,kernelType:'square',units: 'meters'});
+
+var minh = ee.Image(image).focal_min({radius: 4000,kernelType:'square',units: 'meters'});
+
+var deltaH = maxh.subtract(minh);
+
+
+var Lzones = ee.Image(0)
+                .where(deltaH.lt(30), 5000)
+                .where(deltaH.gte(30).and(deltaH.lt(150)), 5000)
+                .where(deltaH.gte(150).and(deltaH.lt(300)), 10000)
+                .where(deltaH.gte(300).and(deltaH.lt(600)), 10000)
+                .where(deltaH.gte(600), 50000)
+                .clip(geometry)
+                //.updateMask(elevation.neq(0))
+
+
+var SRL = ee.Image(0.2).multiply(deltaH).divide(Lzones);
+
+var kr = SRL.rename('kr')
+
+//var kr = SRL;
+
+var pi = Math.PI;
+
+
+//
+//< 2 um mass fraction of the < 2 mm soil material determined using the pipette method
+var clay = ee.Image('CSIRO/SLGA/CLY').select('CLY_000_005_EV').multiply(0.01);
+//20 um - 2 mm mass fraction of the < 2 mm soil material determined using the pipette method
+var sand = ee.Image('CSIRO/SLGA/SND').select('SND_000_005_EV').multiply(0.01);
+var soc  = ee.Image('CSIRO/SLGA/SOC').select('SOC_000_005_EV').multiply(0.01);
+
+var silt = ee.Image('CSIRO/SLGA/SLT').select('SLT_000_005_EV').multiply(0.01);
+
+
+
+
+var table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','Australia')
+var geometry = Australia.geometry();
+//var ctry = ee.Geometry.Rectangle([110.0, -10.0, 155.0, -45.0]); //Aus topleft then bottom right
+var inspectorPanel = ui.Panel({
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {width: '280px'}
+});
+// Create an intro panel with labels.
+var intro = ui.Panel([
+  ui.Label({
+    value: 'Wind Erosion Model Online Tool',
+    style: {fontSize: '20px', fontWeight: 'bold'}
+  }),
+  ui.Label({value:'Using RWEQ wind erosion model to get monthly ouput',style: {fontSize: '20px'}})
+]);
+// SET UP SECONDARY PANELS
+// years panel
+var yearSectionLabel = ui.Label({value:'Define the Year',style: {fontSize: '18px', fontWeight: 'bold'}});
+var startYearLabel = ui.Label('Year');
+var Yearslider = ui.Slider({min:2001, max:2020, value:2009, step:1});
+Yearslider.style().set('stretch', 'horizontal');
+var monthSectionLabel = ui.Label({value:'Define the Month',style: {fontSize: '18px', fontWeight: 'bold'}});
+var starMonthLabel = ui.Label('Month');
+var Monthslider = ui.Slider({min:1, max:12, value:11, step:1});
+Monthslider.style().set('stretch', 'horizontal');
+var yearsPanel = ui.Panel(
+  [
+    yearSectionLabel,
+    ui.Panel([startYearLabel, Yearslider], ui.Panel.Layout.Flow('horizontal'), {stretch: 'horizontal'})
+  ] 
+);
+var monthPanel = ui.Panel(
+  [
+    monthSectionLabel,
+    ui.Panel([starMonthLabel, Monthslider], ui.Panel.Layout.Flow('horizontal'), {stretch: 'horizontal'})
+  ] 
+);
+
+var coordSectionLabel = ui.Label({value:'Input the Coordinates',style:{fontSize: '18px', fontWeight: 'bold'}});
+
+var latLabel = ui.Label({value:'Lat:',style: {fontSize: '15px',stretch: 'horizontal'}});
+var latBox = ui.Textbox({value:-29.4448,style: {fontSize: '20px', margin: '4px 15px 0px -50px', fontWeight: 'bold',stretch: 'horizontal'}});
+latBox.style().set('stretch', 'horizontal');
+
+var lonLabel = ui.Label({value:'Lon:',style: {fontSize: '15px',stretch: 'horizontal'}});
+var lonBox = ui.Textbox({value:142.0568,style: {fontSize: '20px', margin: '4px 30px 0px -50px', fontWeight: 'bold',stretch: 'horizontal'}});
+lonBox.style().set('stretch', 'horizontal');
+
+var latLonPanel = ui.Panel(
+  [
+    coordSectionLabel,
+    ui.Panel([lonLabel, lonBox, latLabel, latBox],ui.Panel.Layout.Flow('horizontal'))
+  ],
+  null,
+  {stretch: 'horizontal'}
+);
+
+var NLP_state = ['NSW',
+                'ACT',
+                'WA',
+                'SA',
+                'QLD',
+                'VIC',
+                'TAS',
+                'NT'];
+
+var NLP_area =['Avon River Basin',
+              'Marine NRM',
+              'Swan Region',
+              'Rangelands Region',
+              'South Coast Region',
+              'South West Region',
+              'Wet Tropics',
+              'Wimmera',
+              'Northern Agricultural Region',
+              'Peel-Harvey Region',
+              'Desert Channels',
+              'East Gippsland',
+              'Eyre Peninsula',
+              'Fitzroy',
+              'Central West',
+              'Condamine',
+              'Co-operative Management Area',
+              'Corangamite',
+              'Burdekin',
+              'Burnett Mary',
+              'Cape York',
+              'Central Tablelands',
+              'ACT',
+              'Adelaide and Mount Lofty Ranges',
+              'Alinytjara Wilurara',
+              'Maranoa Balonne and Border Rivers',
+              'North East',
+              'North West NRM Region',
+              'North West NSW',
+              'Northern and Yorke',
+              'North NRM Region',
+              'North Central',
+              'North Coast',
+              'North Coast - Lord Howe Island',
+              'Kangaroo Island',
+              'Mackay Whitsunday',
+              'Mallee',
+              'Murray',
+              'Glenelg Hopkins',
+              'Goulburn Broken',
+              'Greater Sydney',
+              'Hunter',
+              'Southern Gulf',
+              'Torres Strait',
+              'West Gippsland',
+              'Western',
+              'South East',
+              'South East NSW',
+              'South East Queensland',
+              'South West Queensland',
+              'Riverina',
+              'South NRM Region',
+              'South Australian Arid Lands',
+              'South Australian Murray Darling Basin',
+              'Northern Gulf',
+              'Northern Tablelands',
+              'Northern Territory',
+              'Port Phillip and Western Port'];
+              
+
+var mapPanel = ui.Map();
+mapPanel.style().set({cursor:'crosshair'});
+mapPanel.setOptions('TERRAIN');
+//var processingLabel = ui.Label('Processing, please wait...', {shown:false, position: 'top-center'});
+//mapPanel.add(processingLabel);
+mapPanel.add(ui.Label({
+  value: 'Click a point',
+  style: {position: 'top-center'}
+}));
+
+var layers = mapPanel.layers();
+
+
+//print(NLP_regions)
+//var getRegionShp = function(NLP_MU) {
+//  return ee.FeatureCollection(NLP_regions).filterMetadata('NLP_MU','equals',NLP_MU);
+//};
+//var setRegionList = function(shpNames, defaultName) {
+//  var regionLabel = ui.Label('Select Region:', {padding: '5px 0px 0px 5px', fontSize: '14.5px'});
+//  var regionSelect = ui.Select({items: shpNames.sort(), value: defaultName, style: {stretch: 'horizontal'}});
+//  
+//  return regionSelectPanel.add(
+//    ui.Panel([regionLabel, regionSelect], ui.Panel.Layout.Flow('horizontal'),
+//      {stretch: 'horizontal', margin: '-8px 0px 0px 0px'}));
+//};
+//var regionSelectPanel = ui.Panel();
+//setRegionList(NLP_area,'Western');
+
+
+var getRegionShp = function(NLP_MU) {
+  return ee.FeatureCollection(NLP_regions).filterMetadata('STATE','equals',NLP_MU);
+};
+var setRegionList = function(shpNames, defaultName) {
+  var regionLabel = ui.Label('Select State:', {padding: '5px 0px 0px 5px', fontSize: '14.5px'});
+  var regionSelect = ui.Select({items: shpNames.sort(), value: defaultName, style: {stretch: 'horizontal'}});
+  
+  return regionSelectPanel.add(
+    ui.Panel([regionLabel, regionSelect], ui.Panel.Layout.Flow('horizontal'),
+      {stretch: 'horizontal', margin: '-8px 0px 0px 0px'}));
+};
+var regionSelectPanel = ui.Panel();
+setRegionList(NLP_state,'NSW');
+
+
+//var regionShp = getRegionShp(region)
+var getRegion = function(regionSelectPanel) {
+  return regionSelectPanel.widgets().get(0).widgets().get(1).getValue();
+};
+function zeroPad(num, places) {
+  var zero = places - num.toString().length + 1;
+  return Array(+(zero > 0 && zero)).join("0") + num;
+}
+//print(beforedate)
+//print(afterdate)
+//var refstartdate = ee.Date.fromYMD(2008,12,31); //Min date is Feb 24, 2000 for GLDASv1
+//var refenddate   = ee.Date.fromYMD(2009,2,1);
+//[colPal_RdBu,colPal_Blues,colPal_Reds,colPal_OrRed,colPal_Grays,colPal_Spectralm,colPal_Sunset];
+var colPal_RdBu = ['#2166AC','#67A9CF','#D1E5F0','#F7F7F7','#FDDBC7','#EF8A62','#B2182B'];
+var colPal_Blues = ['#FFFFFF','#EFF3FF','#C6DBEF','#9ECAE1','#6BAED6','#4292C6','#2171B5','#084594'];
+var colPal_Reds = ['#FEE5D9','#FCBBA1','#FC9272','#FB6A4A','#EF3B2C','#CB181D','#99000D'];
+var colPal_OrRed = ['#FFFFFF','#FEF0D9','#FDD49E','#FDBB84','#FC8D59','#EF6548','#D7301F','#990000'];
+var colPal_Grays = ['#F7F7F7','#D9D9D9','#BDBDBD','#969696','#737373','#525252','#252525'];
+var colPal_Spectral = ['#3288BD','#99D594','#E6F598','#FFFFBF','#FEE08B','#FC8D59','#D53E4F'];
+var colPal_Sunset = ['#F3E79B','#FAC484','#F8A07E','#EB7f86','#CE6693','#A059A0','#5C53A5'];
+var pkg_vis   = require('users/kongdd/public:pkg_vis.js');
+var NAMES = [
+  'Monthly Fkok dust',
+  'Monthly US',
+  'Monthly QH',
+  'Monthly FEWUS'
+];
+var VIS_PARAMS = [
+  {palette: colPal_Reds, min: 0, max: 60,bands: ['Fkok_dust']},
+  {palette: colPal_OrRed, min: 0, max: 0.5,bands: ['US']},
+  {palette: colPal_Sunset, min: 0, max: 0.0001,bands: ['QH']},
+  {palette: colPal_Spectral, min: 0, max: 1,bands: ['FEWUS']}
+];
+var emiLegend = function(windLabel,vispara) {
+  
+  var emiLegendPanel = ui.Panel({
+    style: {
+      padding: '3px 10.5px 3px 3px',
+      position: 'bottom-left'
+    }
+  });
+  
+  var legendTitle = ui.Label('Monthly Wind Erosion',
+    {fontWeight: 'bold', fontSize: '16px', margin: '5px 0 6px 8px'});
+  //var startDay  = startDayBox.getValue();
+  //var endDay    = endDayBox.getValue();
+  var legendSubtitle = ui.Label(windLabel,
+    {margin: '5px 0 6px 8px'});
+  var vis = vispara;
+  var makeColorBarParams = function(palette) {
+    return {
+      bbox: [0, 0, vis.max, 1],
+      dimensions: '100x10',
+      format: 'png',
+      min: vis.min,
+      max: vis.max,
+      palette: palette,
+    };
+  };
+  // Create the color bar for the legend.
+  var colorBar = ui.Thumbnail({
+    image: ee.Image.pixelLonLat().select(0),
+    params: makeColorBarParams(vis.palette),
+    style: {stretch: 'horizontal', margin: '0px 8px', maxHeight: '24px'},
+  });
+  // Create a panel with three numbers for the legend.
+  var legendLabels = ui.Panel({
+    widgets: [
+      ui.Label(vis.min, {margin: '4px 8px'}),
+      ui.Label('', {margin: '4px 8px', textAlign: 'center', stretch: 'horizontal'}),
+      ui.Label(vis.max, {margin: '4px 8px'})
+      ],
+    layout: ui.Panel.Layout.flow('horizontal')
+  });
+  
+  emiLegendPanel.add(legendSubtitle).add(colorBar).add(legendLabels);
+  
+  return emiLegendPanel;
+};
+
+
+function temporalmean(tempcol,unit){
+  var startDate = ee.Date(ee.Image(tempcol.sort('system:time_start').first()).get('system:time_start'));
+  startDate = startDate.advance(ee.Number(0).subtract(startDate.getRelative('day',unit)),'day')
+                       .update(null,null,null,0,0,0);
+  
+  var endDate = ee.Date(ee.Image(tempcol.sort('system:time_start',false).first()).get('system:time_start'));
+  endDate = endDate.advance(ee.Number(0).subtract(endDate.getRelative('day',unit)),'day')
+                   .advance(1,unit).advance(-1,'day')
+                   .update(null,null,null,23,59,59);
+  //print(startDate)
+  //print(endDate)
+  var dateRanges = ee.List.sequence(0, endDate.difference(startDate,unit).round().subtract(1));
+  //print(dateRanges)
+  function makeTimeslice(num){
+    var start = startDate.advance(num, unit);
+    var end = start.advance(1, unit).advance(-1, 'second');
+    // Filter to the date range
+    var filtered = tempcol.filterDate(start, end);
+    // Get the mean
+    var unitMeans = filtered.mean()
+                            .set('system:time_start',start.millis(),'system:time_end',end.millis(),'num_elements',filtered.size());
+    return unitMeans;
+  }
+  // Aggregate to each timeslice
+  var new_collection = ee.ImageCollection(dateRanges.map(makeTimeslice));
+  return new_collection;
+}
+
+function temporalmax(tempcol,unit){
+  var startDate = ee.Date(ee.Image(tempcol.sort('system:time_start').first()).get('system:time_start'));
+  startDate = startDate.advance(ee.Number(0).subtract(startDate.getRelative('day',unit)),'day')
+                       .update(null,null,null,0,0,0);
+  
+  var endDate = ee.Date(ee.Image(tempcol.sort('system:time_start',false).first()).get('system:time_start'));
+  endDate = endDate.advance(ee.Number(0).subtract(endDate.getRelative('day',unit)),'day')
+                   .advance(1,unit).advance(-1,'day')
+                   .update(null,null,null,23,59,59);
+  //print(startDate)
+  //print(endDate)
+  var dateRanges = ee.List.sequence(0, endDate.difference(startDate,unit).round().subtract(1));
+  //print(dateRanges)
+  function makeTimeslice(num){
+    var start = startDate.advance(num, unit);
+    var end = start.advance(1, unit).advance(-1, 'second');
+    // Filter to the date range
+    var filtered = tempcol.filterDate(start, end);
+    // Get the mean
+    var unitMeans = filtered.max()
+                            .set('system:time_start',start.millis(),'system:time_end',end.millis(),'num_elements',filtered.size(),'month',start.get('month'));
+    return unitMeans;
+  }
+  // Aggregate to each timeslice
+  var new_collection = ee.ImageCollection(dateRanges.map(makeTimeslice));
+  return new_collection;
+}
+
+/*
+function temporalMeanAverage(tempcol,unit){
+  var startDate = ee.Date(ee.Image(tempcol.sort('system:time_start').first()).get('system:time_start'));
+  startDate = startDate.advance(ee.Number(0).subtract(startDate.getRelative('month',unit)),'month')
+                       .update(null,null,null,0,0,0);
+  
+  var endDate = ee.Date(ee.Image(tempcol.sort('system:time_start',false).first()).get('system:time_start'));
+  endDate = endDate.advance(ee.Number(0).subtract(endDate.getRelative('month',unit)),'month')
+                   .advance(1,unit).advance(-1,'month')
+                   .update(null,null,null,23,59,59);
+  //print(startDate)
+  //print(endDate)
+  var dateRanges = ee.List.sequence(0, endDate.difference(startDate,unit).round().subtract(1));
+  //print(dateRanges)
+  function makeTimeslice(num){
+    var start = startDate.advance(num, unit);
+    var end = start.advance(1, unit).advance(-1, 'second');
+    // Filter to the date range
+    var filtered = tempcol.filterDate(start, end);
+    // Get the mean
+    var unitMeans = filtered.mean()
+                            .set('system:time_start',start,'system:time_end',end,'num_elements',filtered.size());
+    return unitMeans;
+  }
+  // Aggregate to each timeslice
+  var new_collection = ee.ImageCollection(dateRanges.map(makeTimeslice));
+  return new_collection;
+}
+*/
+
+function funmoisturecol(year){
+    // Original string 
+    //var str = 'users/tensorflow/SoilMoisture/uppersoilmoisture_2000'
+    var str = 'users/tensorflow/SoilMoisture/uppersoilmoisture_'; 
+    // Joining the strings together
+    var stryear   = year.toString();
+    var value = str.concat(stryear); 
+    var img = ee.Image(value);
+    var moisturecol = multibandstoImageCollection(img,'SoilMoisture');
+    var newcoll = moisturecol.map(function(image){
+        var start = stryear.concat('-01-01');
+        start = ee.Date(start);
+        var dateindex = image.get('system:index');
+        //var dateofimage = dateList(dateindex);
+        var index = ee.Number.parse(dateindex);
+        //var len = parseInt(index);
+        var date = start.advance(index,'day');
+        var month = date.get('month');
+        //var date = ee.Date(daily_coll.get(len));
+        return ee.Image(image).setMulti({
+                'system:time_start' : ee.Date(date).millis(),
+                'system:time_end'   : ee.Date(date).millis(),
+                'month'             : month
+        });
+    });
+    
+    return newcoll;
+}
+
+
+var dif = 24 * 60 * 60 * 1000;
+// Create Time Filter for Join
+var timeFilter = ee.Filter.maxDifference({
+    difference: dif,
+    leftField: 'system:time_start',
+    rightField: 'system:time_start'
+});
+
+function funwindcol(year){
+    // Original string 
+    //var str = 'users/tensorflow/SoilMoisture/uppersoilmoisture_2000'
+    var str = 'users/tensorflow/Wind_Aus/Wind_'; 
+    // Joining the strings together
+    var stryear   = year.toString();
+    var value = str.concat(stryear); 
+    var img = ee.Image(value);
+    var windcol = multibandstoImageCollection(img,'Wind');
+    var newcoll = windcol.map(function(image){
+        var start = stryear.concat('-01-01');
+        start = ee.Date(start);
+        var dateindex = image.get('system:index');
+        //var dateofimage = dateList(dateindex);
+        var index = ee.Number.parse(dateindex);
+        //var len = parseInt(index);
+        var date = start.advance(index,'day');
+        var month = date.get('month');
+        //var date = ee.Date(daily_coll.get(len));
+        return ee.Image(image).setMulti({
+                'system:time_start' : ee.Date(date).millis(),
+                'system:time_end'   : ee.Date(date).millis(),
+                'month'             : month
+        });
+        });
+    return newcoll;
+}
+
+
+function multibandstoImageCollection(image,name) {
+  function selectBand(image) {
+    return function(bandName) {
+      return image.select([bandName]).rename(name);
+    }
+  }
+  var bandNames = image.bandNames()
+  return ee.ImageCollection.fromImages(bandNames.map(selectBand(image)))
+}
+
+function tempCFSV2(image){
+  var date = image.get('system:time_start');
+  date     = ee.Date(date);
+  return image.set({
+       'end_hour' : image.get('end_hour'),
+       'start_hour':image.get('start_hour'),
+       'month'    : date.get('month'),
+       //'system:day': date.millis(),
+       'system:time_end' : image.get('system:time_end'),
+       'system:time_start' : image.get('system:time_start')
+     });
+  
+}
+
+function tempgldas(image){
+  var index = image.get('system:index');
+  var year = ee.String(index).slice(1,5);
+  year = ee.Number.parse(year);
+  var month = ee.String(index).slice(5,7);
+  month = ee.Number.parse(month);
+  var day = ee.String(index).slice(7,9);
+  day = ee.Number.parse(day);
+  var date = ee.Date.fromYMD(year,month,day);
+  //var day = ee.Date(year+'-'+month+'-'+date);
+  return image.set({
+       'end_hour' : image.get('end_hour'),
+       'start_hour':image.get('start_hour'),
+       'month'    : date.get('month'),
+       'system:day': date.millis(),
+       'system:time_end' : image.get('system:time_end'),
+       'system:time_start' : image.get('system:time_start')
+     });
+  
+}
+// Set Time Difference for Time Filter 
+var dif = 24 * 60 * 60 * 1000;
+// Create Time Filter for Join
+var timeFilter = ee.Filter.maxDifference({
+    difference: dif,
+    leftField: 'system:time_start',
+    rightField: 'system:time_start'
+});
+
+//var FCover = ee.ImageCollection('users/geogismx/Aus_FVegCover');
+var FCover   = ee.ImageCollection('users/tensorflow/FVCcol');
+//print(FCover)
+var AUFCover = FCover.map(function(image){
+  var index = image.get('system:index');
+  var totalfv = image.select('b1');
+  //var totalfv = image.select('b2').add(image.select('b3'));
+  //var totalfv = image.select('b1');
+  totalfv = totalfv.rename('FVC');
+  var year = ee.String(index).slice(0,4);
+  year  = ee.Number.parse(year);
+  var month = ee.String(index).slice(5,7);
+  month = ee.Number.parse(month);
+  var date = ee.Date.fromYMD(year,month,1);
+  return ee.Image(totalfv).setMulti({
+          'system:time' : date,
+          'system:time_start' : date.millis(),
+          'system:time_end' : date.millis(),
+          'year':year,
+          'month':month
+  });
+})
+//function Fcvinterpolate(imgcol) {
+//  return imgcol.map(function(Img){
+//      var reduced = Img.reduceNeighborhood({
+//          reducer: 'median',
+//          kernel: ee.Kernel.circle(5, 'pixels'), //3km
+//          skipMasked: false
+//      });
+//      var complete = Img.unmask(reduced);
+//      complete = complete.resample('bicubic');
+//      return complete.copyProperties(Img, Img.propertyNames())
+//  })
+//}
+//
+//AUFCover = Fcvinterpolate(AUFCover);
+
+
+var winderosion = function(){
+    var startYear = Yearslider.getValue();
+    var inputyear  = (parseInt(startYear)).toString();
+    var nextyear   = (parseInt(startYear)+1).toString();
+    var beforeyear = (parseInt(startYear)-1).toString();
+    var StartMonth  = Monthslider.getValue();
+    var inputmonth = parseInt(StartMonth);
+    inputmonth = zeroPad(inputmonth, 2);
+    
+    var nextmonth  = parseInt(StartMonth)+1;
+    nextmonth = zeroPad(nextmonth, 2);
+    
+    if (inputmonth=='1'){
+      var beforedate = ee.Date(beforeyear+"-12"+"-31");
+      var afterdate  = ee.Date(inputyear+"-"+nextmonth+"-01");
+    } 
+    else if (inputmonth == '12'){
+      beforedate = ee.Date(inputyear+"-"+inputmonth+"-01");
+      afterdate  = ee.Date(nextyear+"-01"+"-01");
+    }
+    else{
+      beforedate = ee.Date(inputyear+"-"+inputmonth+"-01");
+      afterdate  = ee.Date(inputyear+"-"+nextmonth+"-01");
+    }
+
+    var FCV = AUFCover.filterMetadata('year', 'equals', startYear);
+
+    var allFilter = ee.Filter.date(beforedate, afterdate);
+    
+    var bands = ['Wind_f_inst','SoilMoi0_10cm_inst'];
+    //var bands = ['u-component_of_wind_height_above_ground','v-component_of_wind_height_above_ground','Volumetric_Soil_Moisture_Content_depth_below_surface_layer_5_cm']
+    var GLDAS = ee.ImageCollection("NASA/GLDAS/V021/NOAH/G025/T3H")// v1 Feb 24, 2000 - Aug 1, 2016: 25 km every 3 hours
+        .filter(allFilter)
+        .select(bands)
+        .map(tempgldas);
+    GLDAS =  temporalmax(GLDAS,'day');
+    
+    //var CFSV2 = ee.ImageCollection(imageCollection)// v1 Feb 24, 2000 - Aug 1, 2016: 25 km every 3 hours
+    //    .filter(allFilter)
+    //    .select(bands)
+    //    .map(tempCFSV2);
+    //CFSV2 =  temporalmax(CFSV2,'day');
+    
+    
+    //print(GLDAS);
+    //var moisturecol = funmoisturecol(inputyear).filter(allFilter);
+    //var windcol     = funwindcol(inputyear).filter(allFilter);
+
+    //var innerJoin = ee.Join.inner();
+    
+    //var filter = ee.Filter.equals({
+    //  leftField: 'system:time_start',
+    //  rightField: 'system:time_start'
+    //});
+    //var windsoilmoisture = innerJoin.apply(windcol, moisturecol, filter);
+    
+    //var joinedcol = windsoilmoisture.map(function(feature) {
+    //  return ee.Image.cat(feature.get('primary'), feature.get('secondary'));
+    //});
+    
+    //joinedcol = joinedcol.filterBounds(regionShp.geometry().bounds());
+    
+    var saveAllJoin_FVC = ee.Join.saveAll({
+      matchesKey: 'FVC',
+      ordering: 'system:time_start',
+      ascending: true
+    });
+    
+    var mfilter = ee.Filter.equals({
+      leftField:  'month',
+      rightField: 'month'
+    });
+    
+    //var join = saveAllJoin_FVC.apply(jinedcol,FCV, mfilter);
+
+    var join = saveAllJoin_FVC.apply(GLDAS,FCV, mfilter);
+    //print(join);
+
+    var SCF = clay.expression('1/(1+0.0066*clay*clay+0.021*soc*soc)',{clay:clay,soc:soc});
+    
+    
+    var EF  = clay.expression('(29.09+0.31*sand+0.17*silt+0.33*sand/clay-2.59*soc-0.93*0)/100',{clay:clay,soc:soc,silt:silt,sand:sand});
+    
+    
+    var ad = ee.Image(1.23); // air density kg/m^3
+    var g = ee.Image(9.81); // gravity m/s
+    
+    //var krs = kr.multiply(9);
+    
+    var ref = join.map(function(img){
+        img = ee.Image(img);
+        var Fvcol = ee.ImageCollection.fromImages(img.get("FVC"))
+        var FVC = ee.Image(Fvcol.first());
+        //FVC = FVC.mask(FVC.gte(0).and(FVC.lt(100)));
+        //var wind = windandsoil.select('Wind_f_inst');
+        
+        var wind = img.select('Wind_f_inst');
+        
+        //var wind_u = img.select('u-component_of_wind_height_above_ground');
+        //var wind_v = img.select('v-component_of_wind_height_above_ground');
+        //var SW     = img.select('Volumetric_Soil_Moisture_Content_depth_below_surface_layer_5_cm');
+        //var wind   = wind_u.expression('pow(wind_u**2+wind_v**2,0.5)',{wind_u:wind_u,wind_v:wind_v});
+        //wind     = wind.multiply(0.75);
+        var SW   = img.select('SoilMoi0_10cm_inst').divide(100);
+        SW       = SW.multiply(0.15);
+        
+        wind = ee.Image(wind).multiply(0.75); //max wind (m/s)
+        var WF = wind.expression('wind*((wind-5)**2)/500', {wind:wind});
+        //soil moisture 0-10 cm (kg/m^2) converted to volumetric water content m3/m3 by dividing by 100
+        // see https://ldas.gsfc.nasa.gov/faq/#SoilMoist
+        //var SW =  img.select('SoilMoisture'); //for % consistent with wp 
+        var K = kr.expression('exp(1.86*kr-2.41*(kr**0.934))',{kr:kr}); //kr is surface roughness factor!!
+        var MF = WF.expression('WF*(ad/g)*(1-SW)', {WF:WF,SW:SW,ad:ad,g:g});
+        var CF = FVC.expression('exp(-0.0438*FVC)',{FVC:FVC});
+        var Qmax = MF.expression('109.8*(MF*EF*SCF*K*CF)', {MF:MF,EF:EF,SCF:SCF,K:K,CF:CF});
+        var S = MF.expression('150.71*((MF*EF*SCF*K*CF)**-0.3711)', {MF:MF,EF:EF,SCF:SCF,K:K,CF:CF});
+        var SL = S.expression('(1000/S/S)*Qmax*(exp(-(500/S)**2))',{Qmax:Qmax,S:S});
+        //SL = SL.divide(10000);
+        SL     = SL.multiply(1000000);
+        //SL = SL.mask(SL.gte(0).and(SL.lt(1)));
+        return SL.rename('SL')
+                 .addBands(wind)
+                 .addBands(SW)
+                 .toFloat()
+                 .set('system:time_start', img.get('system:time_start'));
+        })
+    return ee.ImageCollection(ref);
+}
+
+// Add a band containing image date as years since year
+function createTimeBand(img) {
+  var year = ee.Date(img.get('system:time_start')).get('year').subtract(2000);
+  return ee.Image(year).byte().addBands(img);
+}
+//end
+var plotsPanelLabel = ui.Label({value:'wind erosion model visualization', style:{fontSize: '17px',fontWeight: 'bold', stretch: 'horizontal'}});
+var plotPanel = ui.Panel(null, null, {stretch: 'horizontal'});
+var plotPanelParent = ui.Panel([plotsPanelLabel, plotPanel], null, {width: '260px'});
+var exportimagefun = function(img) {
+              Map.clear();
+              if (mapPanel.widgets().length() == 2){
+                var actpanel = mapPanel.widgets().get(1);
+                mapPanel.remove(actpanel);
+              }
+              //var rg_value = getRegion(regionSelectPanel);
+              //print(rg_value);
+              //var regionShp = getRegionShp(rg_value);
+              //print(regionShp)
+              var ref = winderosion();
+              print(ref,'ref')
+              var Year = Yearslider.getValue();
+              var inputyear  = (parseInt(Year)).toString();
+              var Month  = Monthslider.getValue();
+              var inputmonth = (parseInt(Month)).toString();
+              var title = " "+inputyear+"-"+inputmonth+"-"+'Aus'+" ";
+              //print(ref)
+              var sumSL = ref.select('SL').sum();
+              
+              sumSL = sumSL.rename('monthly_SL');
+              //var minmax = sumSL.reduceRegion({
+              //  reducer: ee.Reducer.minMax(),
+              //  geometry: regionShp.geometry(),
+              //  scale: 200000,
+              //  maxPixels:1e13
+              //});
+              
+              
+              //print(sst)
+              //minmax = ee.Dictionary(minmax).getInfo();
+              //print(minmax);
+              //var maxrad = parseInt(minmax.SL_max)+1;
+              //var minrad = parseInt(minmax.SL_min);
+              //var minrad = 0;
+              //print(maxrad,minrad)
+              var vis_vi = {min: 0, max: 100, palette: colPal_OrRed};
+              //var vis_vi  = {min: ee.Number(minrad), max: ee.Number(maxrad), palette:ee.List(pkg_color.RdYlGn[11]).reverse().getInfo()};
+              //var composite = sumSL.clip(regionShp.geometry());
+              var compositeLayer = ui.Map.Layer(sumSL,vis_vi,inputmonth+"-"+'wind erosion loess');
+              mapPanel.layers().add(compositeLayer);
+              
+              mapPanel.add(emiLegend(inputmonth+"-"+'Wind Erosion Soil Loss Mg/m2/month',vis_vi))
+              
+              //var Eminmax = EQh.reduceRegion({
+              //  reducer: ee.Reducer.minMax(),
+              //  geometry: regionShp.geometry(),
+              //  scale: 100000,
+              //  maxPixels:1e13
+              //});
+              
+              
+              //print(sst)
+              //Eminmax = ee.Dictionary(Eminmax).getInfo();
+              //print(minmax);
+              //var Emaxrad = parseInt(minmax.E_max)+1;
+              //var Eminrad = parseInt(minmax.E_min);
+              //var minrad = 0;
+              //print(maxrad,minrad)
+              //var vis_vie = {min: Eminrad, max: Emaxrad, palette: colPal_Spectral};
+              //var vis_vi  = {min: ee.Number(minrad), max: ee.Number(maxrad), palette:ee.List(pkg_color.RdYlGn[11]).reverse().getInfo()};
+              //var Ecomposite = ee.Image(EQh).clip(regionShp.geometry()).visualize(vis_vie);
+              //var EcompositeLayer = ui.Map.Layer(Ecomposite).setName('EQh');
+              //mapPanel.layers().add(EcompositeLayer);
+              
+              //var timelist = ref.get('system:time_start');
+              var x = parseFloat(lonBox.getValue());
+              var y = parseFloat(latBox.getValue());
+              //lonBox.setValue(x);
+              //latBox.setValue(y);
+              var point = ee.Geometry.Point(x, y);
+              //ref.select('QH')
+              var windChart = ui.Chart.image.series(ref, point, ee.Reducer.first(), 500);
+                  windChart.setOptions({
+                  title: 'Wind Erosion Over Time',
+                  vAxis: {title: 'Wind Erosion'},
+                  hAxis: {title: 'Date',gridlines: {count: 0}},
+              });
+              plotPanelParent.widgets().set(1, windChart);
+              //
+              // Create a map for each visualization option.
+              //var maps = [];
+              //NAMES.forEach(function(name, index) {
+              //  var map = ui.Map().add(ui.Label(name))
+              //                    .setControlVisibility(false);
+              //  
+              //  map.addLayer(finaloutput, VIS_PARAMS[index], name);
+              //  //var lg = pkg_vis.grad_legend(VIS_PARAMS[index],name, false);
+              //  //map.add(lg);
+              //  map.add(emiLegend(name,VIS_PARAMS[index]))
+              //  maps.push(map);
+              //});
+              //var linker = ui.Map.Linker(maps);
+              //// Enable zooming on the top-left map and
+              //// show the scale (e.g. '500m') on the bottom-right map.
+              //maps[0].setControlVisibility({zoomControl: true});
+              //maps[0].setControlVisibility({scaleControl: true});
+              //maps[1].setControlVisibility({zoomControl: true});
+              //maps[1].setControlVisibility({scaleControl: true});
+              //maps[2].setControlVisibility({zoomControl: true});
+              //maps[2].setControlVisibility({scaleControl: true});
+              //maps[3].setControlVisibility({zoomControl: true});
+              //maps[3].setControlVisibility({scaleControl: true});              
+              //
+              //maps[0].setCenter(134,-27);
+              //// Create a title.
+              //var maptitle = ui.Label(inputyear+"-"+inputmonth+' '+'Wind Erosion Modeling Visualizations', {
+              //  stretch: 'horizontal',
+              //  textAlign: 'center',
+              //  fontWeight: 'bold',
+              //  fontSize: '24px'
+              //});
+              // Create a grid of maps.
+              //var mapGrid = ui.Panel(
+              //  [
+              //    //ui.Panel([maptitle],null,{stretch: 'vertical'}),
+              //    ui.Panel([maps[0], maps[1]], null, {stretch: 'both'}),
+              //    ui.Panel([maps[2], maps[3]], null, {stretch: 'both'})
+              //  ],
+              //  ui.Panel.Layout.Flow('horizontal'), {stretch: 'both'}
+              //);
+              //// Add the maps and title to the ui.root.
+              //ui.root.widgets().get(0).add(0,[maptitle, mapGrid]);
+              //ui.Map.widgets.get(0).insert(0,[maptitle, mapGrid]);
+              //Map.add(linker)
+              //ui.root.clear()
+              //ui.root.insert(0,inspectorPanel);
+              //widgets.unlisten();
+              //ui.root.widgets().get(0).add([maptitle,mapGrid]);
+              //ui.root.setLayout(ui.Panel.Layout.Flow('vertical'));
+              //ui.Map.widgets().reset([mapGrid]);
+              //ui.Map.widgets().reset(0,[maptitle, mapGrid]);
+              //print(inspectorPanel.widgets())
+              //ui.root.remove(inspectorPanel.widgets().get(0));
+              //ui.root.remove(inspectorPanel.widgets().get(1));
+              //ui.root.remove(inspectorPanel.widgets().get(2));
+              //ui.root.remove(inspectorPanel.widgets().get(3));
+              //EQh = ee.Image(EQh).clip(regionShp.geometry());
+              //sumFkok_dust = sumFkok_dust.addBands(EQh);
+              //var urlimgget = sumSL.getDownloadURL({
+              //        region: JSON.stringify(geometry.bounds().getInfo()),
+              //        name: 'Wind_Erosion_Output'+"_"+inputyear+"_"+inputmonth,
+              //        crs: 'EPSG:4326',
+              //        scale: 1000
+              //})
+              //var link = ui.Chart(
+              //          [
+              //            [title],
+              //            ['<a target="_blank" href='+urlimgget+'>' + title+
+              //             'Wind Erosion Model Output Download</a>']
+              //          ], 'Table',
+              //           {allowHtml: true});
+              //var linkPanel = ui.Panel([link]);
+              //inspectorPanel.insert(4,linkPanel);
+              //Export.image.toDrive({
+              //  image: finaloutput,
+              //  description: 'wind erosion model',
+              //  folder:'winderoaus',
+              //  region: geometry.bounds(),
+              //  crs: 'EPSG:4326',
+              //  scale:20000
+              //})
+              //ui.root.clear();
+              //ui.root.widgets().reset([inspectorPanel,mapGrid,plotPanelParent]);
+              //print(finaloutput)
+              //plotPanelParent.add(linkPanel);
+              //ui.root.setLayout(ui.Panel.Layout.Flow('horizontal'));
+}
+
+var submitButton = ui.Button({label: 'Submit',onClick:exportimagefun});
+submitButton.style().set('stretch', 'horizontal');
+var submitPanel = ui.Panel(
+  [
+    ui.Panel([submitButton],ui.Panel.Layout.Flow('horizontal'))
+  ],
+  null,
+  {stretch: 'horizontal'}
+);
+
+var generateChart = function (circle,pointforchart) {
+  
+  var windChart = ui.Chart.image.series(pointforchart, circle.geometry(), ee.Reducer.mean(), 1000);
+      windChart.setOptions({
+      title: 'Wind Erosion Over Time',
+      vAxis: {title: 'Wind Erosion'},
+      hAxis: {title: 'Date',gridlines: {count: 0}},
+      });
+    var x = parseFloat(lonBox.getValue());
+    var y = parseFloat(latBox.getValue());
+    //lonBox.setValue(x);
+    //latBox.setValue(y);
+    var point = ee.Geometry.Point(x, y);
+    var dot = ui.Map.Layer(point, {color: '000000'}, 'point');
+    mapPanel.layers().add(dot);
+    plotPanelParent.widgets().set(1, windChart);
+    
+  
+};
+
+function filterMasked(imageCollection, circle) {
+  return imageCollection.map(function(i) {
+    return i.set('any', i.select(0).reduceRegion(ee.Reducer.anyNonZero(), circle.geometry(), 20000).values().get(0))
+  }).filter(ee.Filter.eq('any', 1))
+}
+
+
+
+mapPanel.onClick(
+    function (coords) {
+      //remove last polygon from map
+      for (var i = 0; i < mapPanel.layers().length(); i++) {
+            var layer = mapPanel.layers().get(i);
+            if ('point' === layer.get('name')) {
+                mapPanel.remove(layer);
+            }
+      }
+      var x = coords.lon;
+      var y = coords.lat;
+      var point = ee.Geometry.Point(coords.lon, coords.lat);
+      lonBox.setValue(x);
+      latBox.setValue(y);
+      var circle = ee.Feature(point).buffer(1000);
+      var pointcol = winderosion(circle);
+      //print(pointcol)
+      generateChart(circle,pointcol);
+      // add layer to map
+      //mapPanel.layers().insert(mapPanel.layers().length(), pointLayer);
+})
+
+inspectorPanel.add(intro);
+inspectorPanel.add(yearsPanel);
+inspectorPanel.add(monthPanel);
+//inspectorPanel.add(regionSelectPanel);
+inspectorPanel.add(latLonPanel);
+inspectorPanel.add(submitPanel);
+mapPanel.setCenter(141,-32);
+//exportimagefun(finaloutput)
+
+ui.root.clear();
+ui.root.insert(0,inspectorPanel);
+ui.root.add(mapPanel);
+ui.root.add(plotPanelParent);
