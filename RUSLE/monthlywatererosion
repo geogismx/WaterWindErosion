@@ -1,0 +1,693 @@
+var dem = ee.Image("AU/GA/DEM_1SEC/v10/DEM-H"),
+    NLP_regions = ee.FeatureCollection("users/tensorflow/NLPMU_2018"),
+    FCover = ee.ImageCollection("users/tensorflow/FVCcol"),
+    table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017"),
+    soil = ee.ImageCollection("CSIRO/SLGA"),
+    LS = ee.Image("users/tensorflow/aus_ls_90"),
+    GSMaP = ee.ImageCollection("JAXA/GPM_L3/GSMaP/v6/operational"),
+    GPM = ee.ImageCollection("NASA/GPM_L3/IMERG_V06"),
+    TRMM = ee.ImageCollection("TRMM/3B42");
+//var table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','Australia')
+var geometry = Australia.geometry();
+
+//var dataset = ee.Image("MERIT/Hydro/v1_0_1");
+//var uca     = dataset.select('upg');
+
+
+
+var colPal_RdBu = ['#2166AC','#67A9CF','#D1E5F0','#F7F7F7','#FDDBC7','#EF8A62','#B2182B'];
+var colPal_Blues = ['#FFFFFF','#EFF3FF','#C6DBEF','#9ECAE1','#6BAED6','#4292C6','#2171B5','#084594'];
+var colPal_Reds = ['#FEE5D9','#FCBBA1','#FC9272','#FB6A4A','#EF3B2C','#CB181D','#99000D'];
+var colPal_OrRed = ['#FFFFFF','#FEF0D9','#FDD49E','#FDBB84','#FC8D59','#EF6548','#D7301F','#990000'];
+var colPal_Grays = ['#F7F7F7','#D9D9D9','#BDBDBD','#969696','#737373','#525252','#252525'];
+var colPal_Spectral = ['#3288BD','#99D594','#E6F598','#FFFFBF','#FEE08B','#FC8D59','#D53E4F'];
+var colPal_Sunset = ['#F3E79B','#FAC484','#F8A07E','#EB7f86','#CE6693','#A059A0','#5C53A5'];
+var pkg_vis   = require('users/kongdd/public:pkg_vis.js');
+
+
+var NewFCover = FCover.map(function(image){
+  var index = image.get('system:index');
+  var totalfv = image.select('b1');
+  totalfv = totalfv.rename('FCV').divide(100);
+  
+  var Cfactor = totalfv.expression("exp(-0.799-7.74*totalfv+0.0449*totalfv*totalfv)",{"totalfv":totalfv});
+  
+  
+  var year = ee.String(index).slice(0,4);
+  year = ee.Number.parse(year);
+  var month = ee.String(index).slice(5,7);
+  month = ee.Number.parse(month);
+  var date = ee.Date.fromYMD(year,month,1);
+  return ee.Image(Cfactor).setMulti({
+          'system:time' : date,
+          'year':year,
+          'month':month
+  });
+})
+
+
+function Fcvinterpolate(imgcol) {
+  return imgcol.map(function(Img){
+      var reduced = Img.reduceNeighborhood({
+          reducer: 'median',
+          kernel: ee.Kernel.circle(5, 'pixels'), //3km
+          skipMasked: false
+      });
+      var complete = Img.unmask(reduced);
+      complete = complete.resample('bicubic');
+      return complete.copyProperties(Img, Img.propertyNames())
+  })
+}
+
+
+function multibandstoImageCollection(image) {
+  
+  function selectBand(image) {
+    return function(bandName) {
+      return image.select([bandName]).rename('Rainfall');
+    }
+  }
+  
+  var bandNames = image.bandNames()
+
+  return ee.ImageCollection.fromImages(bandNames.map(selectBand(image)))
+}
+
+function funcRainfall(year,month){
+    // Original string 
+    var str = 'users/tensorflow/Rainfall_Aus/Rainfall_'; 
+    // Joining the strings together
+    var stryear   = year.toString();
+    var value = str.concat(stryear); 
+    var img = ee.Image(value);
+    var rainfallcol = multibandstoImageCollection(img);
+    
+    var newcoll = rainfallcol.map(function(image){
+        var start = stryear.concat('-01-01');
+        start = ee.Date(start);
+        var dateindex = image.get('system:index');
+        //var dateofimage = dateList(dateindex);
+        var index = ee.Number.parse(dateindex);
+        //var len = parseInt(index);
+        var date = start.advance(index,'day');
+        var month = date.get('month');
+        //var date = ee.Date(daily_coll.get(len));
+        return ee.Image(image).setMulti({
+                'system:time_start' : date,
+                'system:time_end'   : date,
+                'month'             : month
+        });
+    });
+    return newcoll.filterMetadata('month','equals',month);
+}
+
+
+function silotemp(year,month){
+  var stryear = year.toString();
+  var start = stryear.concat('-01-01');
+  start = ee.Date(start);
+  
+  var end_date   = start.advance(month,'month');
+  var start_date    = start.advance(month-1,'month');
+  
+  var monthlyrainfall = ee.ImageCollection('projects/eo-datascience-public/assets/silo_daily').filterDate(start_date,end_date).select('daily_rain');
+  //print(yearofsilo)
+  return monthlyrainfall;
+}
+
+
+
+var latlong = ee.Image.pixelLonLat().clip(geometry);
+var lat = latlong.select('latitude');
+//var lon = latlong.select('longitude');
+
+var demsize = dem.projection().nominalScale();
+
+//print('demsize',demsize)
+
+var R_Beta   = ee.Image(1.02).subtract(ee.Image(0.0209).multiply(lat));
+
+//var img_Ek = img_I.expression("0.29*(1-0.72*exp(-0.05*I))",{"I":img_I})
+
+var R_alpha0 = R_Beta.expression("1.05*pow(10,2.08-1.58*R_Beta)",{"R_Beta":R_Beta});
+
+
+var R_Alpha = R_alpha0.multiply(ee.Image(2.349).add(ee.Image(0.0404).multiply(lat)).subtract(ee.Image(0.0002684).multiply(dem.select('elevation'))));
+
+
+//Export.image.toDrive({
+//  image: R_Beta,
+//  description: 'Aus_Rfactor_Beta',
+//  folder: 'Aus_SoilLoss',
+//  region: Australia.geometry().bounds(),
+//  scale: 92.87483954708176,
+//  maxPixels: 1e13
+//});
+//
+//
+//Export.image.toDrive({
+//  image: R_Alpha,
+//  description: 'Aus_Rfactor_Alpha',
+//  folder: 'Aus_SoilLoss',
+//  region: Australia.geometry().bounds(),
+//  scale: 92.87483954708176,
+//  maxPixels: 1e13
+//});
+
+
+//var minmax = R_Alpha.reduceRegion({
+//  reducer: ee.Reducer.minMax(),
+//  geometry: geometry,
+//  scale: 1000,
+//  maxPixels:1e13
+//});
+//
+//
+////print(sst)
+//minmax = ee.Dictionary(minmax).getInfo();
+//print(minmax);
+//var maxsl = parseInt(minmax.Soil_Loss_max);
+//var minsl = parseInt(minmax.Soil_Loss_min);
+////var minrad = 0;
+//print(maxsl,minsl)
+
+
+
+var RAusR1 = function(image){
+    var img_I = ee.Image(image).select("Rainfall").divide(24);
+    var img_Ek = img_I.expression("0.29*(1-0.72*exp(-0.05*I))",{"I":img_I})
+    //var img_Ek = ee.Image(0.283).multiply(ee.Image(1).subtract(ee.Image(0.52).multiply(ee.Image(img_I.multiply(0.042)).exp())));
+    
+    var img_Eh = img_Ek.multiply(img_I).multiply(24);
+    var img_R = img_Eh.multiply(img_I).multiply(12);
+    img_R = img_R.rename('Rfactor').copyProperties(image,['system:time_start','system:time_end','month']);
+    // Return only good pixels
+    //return image.addBands(img_C).addBands(img_C1).mask(maskedImage);
+    return img_R
+};
+
+
+
+
+var RAusR2 = function(image){
+    var dailyR = ee.Image(image).select("daily_rain");
+    
+    var img_R  =  dailyR.expression("pow(dailyR,R_Beta)",{"dailyR":dailyR,"R_Beta":R_Beta});
+
+    img_R = img_R.rename('Rfactor').copyProperties(image,['system:time_start','system:time_end','month']);
+    // Return only good pixels
+    //return image.addBands(img_C).addBands(img_C1).mask(maskedImage);
+    return img_R
+};
+
+
+
+
+
+function temporalmonth(tempcol,unit){
+  var startDate = ee.Date(ee.Image(tempcol.sort('system:time_start').first()).get('system:time_start'));
+  startDate = startDate.advance(ee.Number(0).subtract(startDate.getRelative('month',unit)),'month')
+                       .update(null,null,null,0,0,0);
+  
+  var endDate = ee.Date(ee.Image(tempcol.sort('system:time_start',false).first()).get('system:time_start'));
+  endDate = endDate.advance(ee.Number(0).subtract(endDate.getRelative('month',unit)),'month')
+                   .advance(1,unit).advance(-1,'month')
+                   .update(null,null,null,23,59,59);
+  var dateRanges = ee.List.sequence(0, endDate.difference(startDate,unit).round().subtract(1));
+  function makeTimeslice(num){
+    var start = startDate.advance(num, unit);
+    var end = start.advance(1, unit).advance(-1, 'second');
+    // Filter to the date range
+    var filtered = tempcol.select([0]).filterDate(start, end);
+    // Get the mean
+    var unitMeans = filtered.sum()
+                            .set('system:time_start',start,'system:time_end',end,'num_elements',filtered.size());
+                            //.set('system:time_start',start.millis(),'system:time_end',end.millis(),'num_elements',filtered.size());
+    return unitMeans;
+  }
+  // Aggregate to each timeslice
+  var new_collection = ee.ImageCollection(dateRanges.map(makeTimeslice));
+
+  return new_collection;
+}
+
+
+
+
+
+
+//var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','Australia');
+
+var pkg_color = require('users/gena/packages:colorbrewer').Palettes;
+
+
+var pi = Math.PI;
+//
+//var theta = ee.Terrain.slope(dem).multiply(pi).divide(180);
+//
+//
+//var steep_gradient = ee.Image(theta).tan();
+//
+//var steep_slope    = ee.Image(theta).sin();
+//
+//var steep_slope_1 = ee.Image(10.8).multiply(steep_slope).add(0.03);
+//var steep_slope_2 = ee.Image(16.8).multiply(steep_slope).subtract(0.5);
+//
+////var S = steep_gradient.expression("(steep_gradient < 0.09)?steep_slope_1:steep_slope_2",{'steep_gradient':steep_gradient,'steep_slope_1':steep_slope_1,'steep_slope_2':steep_slope_2});
+//
+//var S = steep_slope.expression("(steep_gradient < 0.09)? steep_slope*10.8+0.03:steep_slope*16.8-0.5",{'steep_slope':steep_slope,'steep_gradient':steep_gradient});
+//
+////var S_1      =    steep_gradient.where(steep_gradient.lt(0.09),steep_slope_1);
+////var S        =    S_1.where(steep_gradient.gte(0.09),steep_slope_2);
+//
+//
+//
+//var numerator_beta = steep_slope.divide(0.0896);
+//var denominator_beta = ee.Image(0.56).add(ee.Image(3).multiply(steep_slope.pow(0.8)));
+//
+//var beta = numerator_beta.divide(denominator_beta);
+//
+//var m = beta.divide(beta.add(1));
+//
+//var gridsize = uca.projection().nominalScale();
+//
+//var lssize = nswls.projection().nominalScale();
+////
+////print(gridsize)
+//////gridsize     = gridsize.multiply(3);
+////var FA = ee.Image(uca);
+////
+////var AA = FA.multiply(ee.Image(gridsize).pow(2));
+////
+////var numerator_1 = ee.Image(AA.add(ee.Image(gridsize).pow(2))).pow(m.add(1));
+////
+////var numerator_2 = AA.pow(m.add(1));
+////
+////var nummerator_L = numerator_1.subtract(numerator_2);
+////
+//var aspect = ee.Terrain.aspect(dem).multiply(pi).divide(180);
+//
+//var X1 = ee.Image(aspect).sin().add(ee.Image(aspect).cos());
+//
+//var X2 = ee.Image(ee.Image(pi).subtract(aspect)).sin().add(ee.Image(ee.Image(pi).subtract(aspect)).cos());
+//
+//var X3 = ee.Image(ee.Image(pi).multiply(1.5).subtract(aspect)).sin().add(ee.Image(ee.Image(pi).multiply(1.5).subtract(aspect)).cos());
+//
+//var X4 = ee.Image(ee.Image(pi).multiply(2).subtract(aspect)).sin().add(ee.Image(ee.Image(pi).multiply(2).subtract(aspect)).cos());
+//
+//var replaced      =    aspect.where(aspect.lt(pi/2),X1);
+//var replaced1     =  replaced.where(aspect.gte(pi/2).and(aspect.lt(pi)),X2);
+//var replaced2     = replaced1.where(aspect.gte(pi).and(aspect.lt(pi*1.5)),X3);
+//var XX            = replaced2.where(aspect.gte(pi*1.5).and(aspect.lte(pi*2)),X4);
+////
+////var DD = ee.Image(gridsize).pow(m.add(2));
+////
+////var XX2 = ee.Image(XX).pow(m);
+////
+////var con2 = ee.Image(22.13).pow(m);
+////
+////var denominator_L = DD.multiply(XX2).multiply(con2);
+////
+////var L = nummerator_L.divide(denominator_L);
+////print(lssize);
+//
+////##################important lamda#############################
+////var lamda = uca.multiply(gridsize).divide(22.13);
+//
+//var lamda = uca.multiply(ee.Image(gridsize)).divide(ee.Image(gridsize).multiply(XX));
+//
+////var lamda = uca.divide(22.13)
+//
+//lamda = lamda.where(lamda.gt(3000),0);
+//
+//var L = ee.Image(lamda).pow(m)
+////##############################################################
+////L      =    L.where(L.gt(gridsize),gridsize);
+//
+////var L = ee.Image(lssize.divide(22.13)).pow(m)
+//
+//var LS = L.multiply(S);
+//
+//LS = LS.where(LS.gt(100),0);
+//
+//LS = LS.rename('LSfactor');
+
+//var minmax = nswls.reduceRegion({
+//  reducer: ee.Reducer.minMax(),
+//  geometry: geometry,
+//  scale: 1000,
+//  maxPixels:1e13
+//});
+//
+//
+//
+////print(sst)
+//minmax = ee.Dictionary(minmax).getInfo();
+//print(minmax);
+
+
+var clay1 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(2)).select('CLY_000_005_EV');
+var clay2 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(2)).select('CLY_005_015_EV');
+
+//SLT_000_005_EV
+//SLT_005_015_EV
+var silt1 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(8)).select('SLT_000_005_EV');
+var silt2 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(8)).select('SLT_005_015_EV');
+//print(silt1)
+
+
+//SND_000_005_EV
+//SND_005_015_EV
+
+var sand1 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(9)).select('SND_000_005_EV');
+var sand2 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(9)).select('SND_005_015_EV');
+//Map.addLayer(sand1)
+
+//SOC_000_005_EV
+//SOC_005_015_EV
+
+var soc1 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(10)).select('SOC_000_005_EV');
+var soc2 = ee.Image(ee.ImageCollection("CSIRO/SLGA").toList(12).get(10)).select('SOC_005_015_EV');
+//print(oc1)
+
+var weight1 = 0.333
+var weight2 = 0.667
+var soc = soc1.multiply(ee.Image(weight1)).add(soc2.multiply(ee.Image(weight2)));
+var om = soc.multiply(ee.Image(1.72));
+
+var sand = sand1.multiply(ee.Image(weight1)).add(sand2.multiply(ee.Image(weight2)));
+var silt = silt1.multiply(ee.Image(weight1)).add(silt2.multiply(ee.Image(weight2)));
+var clay = clay1.multiply(ee.Image(weight1)).add(clay2.multiply(ee.Image(weight2)));
+
+var diff100 = sand.add(clay).add(silt).subtract(ee.Image(100));
+var clay100 = diff100.expression("(diff100 != 0)? clay-diff100/3.0:clay",{'diff100':diff100,'clay':clay});
+var sand100 = diff100.expression("(diff100 != 0)? sand-diff100/3.0:sand",{'diff100':diff100,'sand':sand});
+var silt100 = diff100.expression("(diff100 != 0)? silt-diff100/3.0:silt",{'diff100':diff100,'silt':silt});
+
+//clay100 = con(diff100 <> 0, (clay - diff100 / 3.0), clay)
+//sand100 = con(diff100 <> 0, (sand - diff100 / 3.0), sand)
+//silt100 = con(diff100 <> 0, (silt - diff100 / 3.0), silt)
+
+var clay3 = clay100.expression("(clay100 < 0)? 0:clay100",{'clay100':clay100});
+var sand3 = sand100.expression("(sand100 < 0)? 0:sand100",{'sand100':sand100});
+var silt3 = silt100.expression("(silt100 < 0)? 0:silt100",{'silt100':silt100});
+
+//clay2 = con(clay100 < 0, 0, clay100)
+//sand2 = con(sand100 < 0, 0, sand100)
+//silt2 = con(silt100 < 0, 0, silt100)
+
+var dg2     = clay3.expression("exp(0.01*(clay3*log(0.001)+silt3*log(0.026)+sand3*log(1.025)))",{'clay3':clay3,'silt3':silt3,"sand3":sand3});
+//var k_dg2   = dg2.expression("0.0034+0.0387*exp(-0.5*pow(((log10(dg2)+1.533)/0.7671),2))",{"dg2":dg2});
+var K_dgom2 = dg2.expression("0.0667-0.0013*pow((log(om/dg2)-5.6706),2)-0.015*exp(-28.9589*pow(log10(dg2)+1.827,2))",{"dg2":dg2,"om":om});
+
+
+
+
+//Export.image.toDrive({
+//  image: ee.Image(K_dgom2),
+//  description: "KFactor",
+//  folder: 'Aus_KFactor',
+//  region: Australia.geometry().bounds(),
+//  scale:92.87483954708176,
+//  crs: 'EPSG:4326',
+//  maxPixels: 1e10,
+//});
+
+
+
+// Set Time Difference for Time Filter 
+var dif = 24 * 60 * 60 * 1000;
+// Create Time Filter for Join
+var timeFilter = ee.Filter.maxDifference({
+    difference: dif,
+    leftField: 'system:time_start',
+    rightField: 'system:time_start'
+});
+var soilerosion = function(startYear,StartMonth){
+    
+    //inputmonth = zeroPad(inputmonth, 2);
+    //var nextmonth  = parseInt(StartMonth)+1;
+    //nextmonth = zeroPad(nextmonth, 2);
+    //if (inputmonth=='1'){
+    //  var beforedate = ee.Date(beforeyear+"-12"+"-31");
+    //  var afterdate  = ee.Date(inputyear+"-"+nextmonth+"-01");
+    //} 
+    //else if (inputmonth == '12'){
+    //  beforedate = ee.Date(inputyear+"-"+inputmonth+"-01");
+    //  afterdate  = ee.Date(nextyear+"-01"+"-01");
+    //}
+    //else{
+    //  //beforedate = ee.Date(inputyear+"-"+inputmonth+"-01").advance(-1,'day');
+    //  beforedate = ee.Date(inputyear+"-"+inputmonth+"-01");
+    //  afterdate  = ee.Date(inputyear+"-"+nextmonth+"-01");
+    //}
+    //var beforedate = ee.Date(beforeyear+"-"+"12"+"-31");
+    
+    var soilyear  = parseInt(startYear);
+    var rainmonth = parseInt(StartMonth);
+    
+    var bycovmonth = NewFCover.filterMetadata('year', 'equals', soilyear);
+    //bycovmonth = Fcvinterpolate(bycovmonth);
+    var C = bycovmonth.filterMetadata('month', 'equals',rainmonth).first();
+    //print(C)
+    //var newcoll = funcRainfall(soilyear,rainmonth);
+    //Map.addLayer(C)
+    
+    var mrainfall = silotemp(soilyear,rainmonth);
+    
+    var monthR =  ee.ImageCollection(mrainfall).map(RAusR2).sum();
+    
+    //Map.addLayer(monthR)
+    monthR = monthR.rename('monthR');
+    //n = 0.389
+    var eta = ee.Image(0.389);
+    var tempcosin = (rainmonth-1)*pi/6;
+    var tempcos = ee.Image(tempcosin).cos();
+    //dailyR.expression("pow(dailyR,R_Beta)",{"dailyR":dailyR,"R_Beta":R_Beta});
+    var monthRE = monthR.expression("R_Alpha*(1+eta*tempcos)*monthR",{"R_Alpha":R_Alpha,"monthR":monthR,"eta":eta,"tempcos":tempcos});
+    
+    var R = monthRE.rename('Rfactor');
+    //var id = image.get('month');
+    //id = ee.Number.parse(id);
+    //id = id.add(2);
+    
+    var A = R.multiply(K_dgom2).multiply(LS).multiply(C);
+    A = A.rename('Soil_Loss');
+    var output = A.addBands(R);
+    //A = A.clip(regionShp.geometry())
+    
+    return output.set('startYear',startYear,'StartMonth',StartMonth);
+    //return ee.ImageCollection(finalcol);
+}
+
+
+var getRegionShp = function(NLP_MU) {
+  return ee.FeatureCollection(NLP_regions).filterMetadata('STATE','equals',NLP_MU);
+};
+
+
+var nsw = getRegionShp('NSW');
+//
+
+nsw = geometry.intersection(nsw);
+//Map.addLayer(regionShp)
+
+
+//var rainfallcol = funcRainfall(2020,2);
+
+//print(rainfallcol)
+var RGSaM = function(image){
+    var img_I = ee.Image(image).select("hourlyPrecipRateGC");
+    
+    var img_Ek = ee.Image(0.29).multiply(ee.Image(1).subtract(ee.Image(0.72).multiply(ee.Image(img_I.multiply(-0.05)).exp())));
+
+    var img_Eh = img_Ek.multiply(img_I);
+    var img_R = img_Eh.multiply(img_I);
+    img_R = img_R.rename('Rfactor').copyProperties(image,['system:time_start','system:time_end']);
+    // Return only good pixels
+    //return image.addBands(img_C).addBands(img_C1).mask(maskedImage);
+    return img_R
+};
+var gsamcol=ee.ImageCollection(GSMaP).filterDate("2019-12-01","2020-01-01").map(RGSaM).filterBounds(nsw);
+
+var RGPM = function(image){
+    var img_I = ee.Image(image).select("precipitationCal");
+    
+    var img_Ek = ee.Image(0.29).multiply(ee.Image(1).subtract(ee.Image(0.72).multiply(ee.Image(img_I.multiply(-0.05)).exp())));
+
+    var img_Eh = img_Ek.multiply(img_I).multiply(3);
+    var img_R = img_Eh.multiply(img_I);
+    img_R = img_R.rename('Rfactor').copyProperties(image,['system:time_start','system:time_end']);
+    // Return only good pixels
+    //return image.addBands(img_C).addBands(img_C1).mask(maskedImage);
+    return img_R
+};
+var gpmcol =  ee.ImageCollection(GPM).filterDate("2019-12-01","2020-01-01").map(RGPM).filterBounds(nsw);
+
+var RTRMM = function(image){
+    var img_I = ee.Image(image).select("precipitation");
+    
+    //var img_Ek = ee.Image(0.283).multiply(ee.Image(1).subtract(ee.Image(0.52).multiply(ee.Image(img_I.multiply(0.042)).exp())));
+    var img_Ek = ee.Image(0.29).multiply(ee.Image(1).subtract(ee.Image(0.72).multiply(ee.Image(img_I.multiply(-0.05)).exp())));
+    var img_Eh = img_Ek.multiply(img_I).multiply(3);
+    var img_R = img_Eh.multiply(img_I);
+    img_R = img_R.rename('Rfactor').copyProperties(image,['system:time_start','system:time_end']);
+    // Return only good pixels
+    //return image.addBands(img_C).addBands(img_C1).mask(maskedImage);
+    return img_R
+};
+var trmmcol =ee.ImageCollection(TRMM).filterDate("2019-12-01","2020-01-01").map(RTRMM).filterBounds(nsw);
+
+//print(trmmcol)
+
+function temporalmonth(tempcol,unit){
+  var startDate = ee.Date(ee.Image(tempcol.sort('system:time_start').first()).get('system:time_start'));
+  startDate = startDate.advance(ee.Number(0).subtract(startDate.getRelative('month',unit)),'month')
+                       .update(null,null,null,0,0,0);
+  
+  var endDate = ee.Date(ee.Image(tempcol.sort('system:time_start',false).first()).get('system:time_start'));
+  endDate = endDate.advance(ee.Number(0).subtract(endDate.getRelative('month',unit)),'month')
+                   .advance(1,unit).advance(-1,'month')
+                   .update(null,null,null,23,59,59);
+  var dateRanges = ee.List.sequence(0, endDate.difference(startDate,unit).round().subtract(1));
+  function makeTimeslice(num){
+    var start = startDate.advance(num, unit);
+    var end = start.advance(1, unit).advance(-1, 'second');
+    // Filter to the date range
+    var filtered = tempcol.select([0]).filterDate(start, end);
+    // Get the mean
+    var unitMeans = filtered.sum()
+                            .set('system:time_start',start.millis(),'system:time_end',end.millis(),'num_elements',filtered.size());
+    return unitMeans;
+  }
+  // Aggregate to each timeslice
+  var new_collection = ee.ImageCollection(dateRanges.map(makeTimeslice));
+
+  return new_collection;
+}
+
+var monthgsam = temporalmonth(gsamcol,'month');
+//var monthgpm  = temporalmonth(gpmcol, 'month');
+var monthtrmm = temporalmonth(trmmcol,'month');
+
+//print(monthtrmm)
+//print(monthgsam.select('Rfactor'),'monthgsam')
+
+monthgsam = ee.Image(monthgsam.first());
+//monthgpm = ee.Image(monthgpm.first());
+monthtrmm = ee.Image(monthtrmm.first());
+
+//print(monthtrmm)
+
+//var nswsoil = soilerosion(2019,2);
+
+//var nswsl   = nswsoil.select('Soil_Loss');
+
+//var slcol   = nswsl.addBands(sl);
+//nsw_ls = nsw_ls.select('b1').rename('LSfactor');
+
+//var slcol   = LS.addBands(nsw_ls);
+
+var nsw_re  = ee.Image('users/tensorflow/Rfactor_NSW_2019/r_201912');
+
+//var rlcol   = nsw_re.addBands(nswsoil.select('Rfactor'));
+
+var rl2col  = nsw_re.addBands(monthgsam.select('Rfactor'));
+
+//var rl3col  = nsw_re.addBands(monthgpm.select('Rfactor'));
+
+var rl4col  = nsw_re.addBands(monthtrmm.select('Rfactor'));
+
+var colPals = require('users/tl2581/packages:colorPalette.js');
+
+//Map.addLayer(nswsoil.select('Soil_Loss'), {min:0,max:30,palette:colPals.Spectral},'SOIL LOSS')
+
+//
+var pointNum = ee.Number(300);//Adjust this number depending on the desired number of points
+var rdm = ee.FeatureCollection.randomPoints(nsw, pointNum);
+//Map.addLayer(rdm, {}, 'random points', 1);
+
+//var extract_ls = slcol.reduceRegions({
+//  collection: rdm,
+//  reducer: ee.Reducer.mean(),
+//  scale: 100,
+//});
+
+//var extract_re  = rlcol.reduceRegions({
+//  collection: rdm,
+//  reducer: ee.Reducer.mean(),
+//  scale: 100,
+//});
+
+var extract_re2 = rl2col.reduceRegions({
+  collection: rdm,
+  reducer: ee.Reducer.mean(),
+  scale: 1000,
+});
+
+//var extract_re3 = rl3col.reduceRegions({
+//  collection: rdm,
+//  reducer: ee.Reducer.mean(),
+//  scale: 1000,
+//});
+
+var extract_re4 = rl4col.reduceRegions({
+  collection: rdm,
+  reducer: ee.Reducer.mean(),
+  scale: 1000,
+});
+
+//print(extract)
+//print(extract.limit(20), 'random points extraction');
+
+//Export if needed
+//Export.table(ee.FeatureCollection(extract).flatten());
+
+//Create chart to visualize relationship
+//var chart1 = ui.Chart.feature.byFeature(extract_ls,'b1', 'LSfactor').setChartType('ScatterChart')
+//    .setOptions({title: 'LS validation',
+//    hAxis: {'title': 'Model'},
+//    vAxis: {'title': 'GEE'},
+//    pointSize: 1,});
+
+
+//var chart2 = ui.Chart.feature.byFeature(extract_re,'b1', 'Rfactor').setChartType('ScatterChart')
+//    .setOptions({title: 'Rfactor validation',
+//    hAxis: {'title': 'Model'},
+//    vAxis: {'title': 'GEE'},
+//    pointSize: 1,});
+    
+var chart3 = ui.Chart.feature.byFeature(extract_re2,'b1', 'Rfactor').setChartType('ScatterChart')
+    .setOptions({title: 'Rfactor validation',
+    hAxis: {'title': 'Model'},
+    vAxis: {'title': 'GSMaP'},
+    pointSize: 1,});    
+
+//var chart4 = ui.Chart.feature.byFeature(extract_re3,'b1', 'Rfactor').setChartType('ScatterChart')
+//    .setOptions({title: 'Rfactor validation',
+//    hAxis: {'title': 'Model'},
+//    vAxis: {'title': 'GPM'},
+//    pointSize: 1,});      
+
+
+var chart5 = ui.Chart.feature.byFeature(extract_re4,'b1', 'Rfactor').setChartType('ScatterChart')
+    .setOptions({title: 'Rfactor validation',
+    hAxis: {'title': 'Model'},
+    vAxis: {'title': 'TRMM'},
+    pointSize: 1,});        
+
+//print(chart4)
+print(chart3,chart5);
+//var monthsl = nswsoil.select('Soil_Loss');
+
+//print(nswsoil)              
+//var vis_vi = {min: minsl, max: maxsl, palette: colPal_OrRed};
+
+//Map.addLayer(nswsoil.clip(regionShp.geometry()));
+
+
+
+
+
+//print(mrainfall)
